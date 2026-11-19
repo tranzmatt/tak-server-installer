@@ -4,13 +4,6 @@ What changed for people running these scripts. Newest first.
 
 ## Unreleased
 
-### Fixed
-- Docker install as a normal user (not root): the script now uses sudo to give the 5.8 hardened containers ownership of `tak/` and the database folder. Before, it stopped at `chown: Operation not permitted`, and a later reinstall could overwrite an existing database.
-- Docker install of TAK Server 5.8: the cert folder now keeps group 0 after the installer hands it to the host user, so the container (uid 1001) can still make new client certs there.
-- Docker install of TAK Server 5.8: both containers stayed "unhealthy" because the health check's file list names `crypto-policies/.../openssl.config` files that current UBI 10 no longer ships. The installer now drops list entries missing from the container (original kept as `critical_file_list.txt.orig`).
-- Docker install: after making the certs, TAK Server is restarted with `docker restart`. Running `configureInDocker.sh` again started a second copy beside the one the image already runs, which failed with "Port 8443 was already in use".
-- Docker install: with more than one bundle extracted in `~/tak-docker`, it used whichever folder sorted last (hardened over standard) instead of the ZIP you picked.
-
 ### Added
 - Docker install warns when the machine has less than 8 GB of RAM.
 - Docker install takes the ZIP's path as its argument, so it can be kept anywhere (`--help` shows usage), and says whether it is a standard or hardened bundle. Putting it in `~/tak-docker/` still works.
@@ -18,6 +11,65 @@ What changed for people running these scripts. Newest first.
 
 ### Docs
 - Raspberry Pi 5 / ARM64 notes for the Docker install.
+
+## v1.0.3 (Tue Nov 17, 2026)
+
+TAK Server's private keys are now readable only by TAK Server's own account, the Docker installer runs without a terminal, and a refused ATAK address says why.
+
+### Changed (read this before you update)
+- Key files are locked down. On an Ubuntu server a normal login can no longer read `admin.p12` directly, so copying it off with a normal login now fails. As root it works as before. With a normal login: `sudo cp /opt/tak/certs/files/admin.p12 ~/ && sudo chown $USER ~/admin.p12`, then copy it from your home folder.
+
+### Fixed
+- Ubuntu and Docker installs: the keystores (admin, user, server, the CA signing keystores) and the CA keys are no longer readable by every user on the machine. Ubuntu: owner `tak`, mode 600. Docker: group 0, mode 640. Truststores stay readable, because they go to phones.
+- Docker install runs with no terminal (cloud-init, Ansible, ssh with no tty). `TAK_INTERFACE` picks the network interface, `TAK_DOCKER_ZIP` picks the ZIP.
+- Docker install: a refused ATAK address now says why. Before, it asked again with no message.
+- `tak-docker-enable-enrollment.sh --verify-user`: if TAK Server answers HTTP 401 (wrong user name or password), enrollment now stays on and the script says to check the name and password. Before, it undid the change, although enrollment was fine.
+
+### Added
+- Docker installs: `docker/tak-docker-stop.sh` stops TAK Server, shuts PostgreSQL down cleanly, then stops the database container. A plain `docker stop` kills PostgreSQL, so the next start runs crash recovery and logs "database system was not properly shut down". Use the script before you stop or reboot the machine.
+
+### Installed with v1.0.2 or older?
+Get the new scripts (`git pull`), then lock the key files once. Neither way restarts TAK Server.
+
+- Ubuntu: run `Ubuntu_22.04_TAK_Server_Hardening.sh` from the new copy, or the one-line command in DEPLOYMENT-GUIDE.md, "Certificate file permissions".
+- Docker: `sudo ./docker/tak-docker-enable-enrollment.sh` (safe to run again).
+
+### Known limit
+- Docker containers do not start by themselves after a reboot (same as before). Start them with `docker start takserver-db-<VERSION> takserver-<VERSION>`.
+
+## v1.0.2 (Mon Nov 16, 2026)
+
+ATAK users can sign in to a Docker install with a username and password on port 8446, and the Docker install works again with TAK Server 5.8, on Rocky/RHEL 9 and as a normal user.
+
+### Fixed
+- Docker install of TAK Server 5.8: the database image builds again. TAK's image moved to RHEL 10.3, which the PostgreSQL repo does not list yet; the installer now points it at the RHEL 10 folder.
+- Docker install sets up certificate enrollment, so ATAK sign-in on 8446 works (before: HTTP 500).
+- Docker install asks for the address or name your ATAK users type and puts it in the server certificate. Before, the certificate named only `takserver` and ATAK refused every real address. `TAK_SERVER_NAMES` skips the question.
+- Docker install works for a normal user: `sudo` is used for the ownership changes, `certs/files` keeps group 0 so the 5.8 container can make certificates, and the health check no longer lists a file the image does not have (containers show `(healthy)`). The bundle named inside the chosen ZIP is used. Thanks @tranzmatt.
+- Docker install on stock Rocky 9 / RHEL 9 installs Docker CE from Docker's repo instead of the `podman-docker` stand-in, which has no `docker.service`.
+- Docker install builds the database image with `--pull --no-cache`, so it always gets the newest PostgreSQL build.
+- Ubuntu install: the PostgreSQL and Caddy signing keys and the Caddy repo list are retried up to 5 times and checked. If they still fail, the script stops with a clear message instead of a later `NO_PUBKEY` error.
+- `git pull` no longer stops with "Your local changes would be overwritten" after you ran `chmod +x` on the Ubuntu scripts: they are now stored as executable.
+
+### Installed with v1.0.1 or older (Docker)?
+Running the installer again stops at the existing database container and changes nothing. Get the new scripts (`git pull`), then run, on the machine that runs TAK Server:
+
+```
+sudo ./docker/tak-docker-enable-enrollment.sh --server-name <address your ATAK users type>
+```
+
+It turns on ATAK sign-in on 8446, makes a server certificate with the names you give (same CA, so phones keep working), lets `makeCert.sh` inside the container make certificates, and fixes `(unhealthy)` containers. The old files are kept. Leave out `--server-name` to keep your server certificate as it is.
+
+To move the database to the newest PostgreSQL build (keeps your data, takes a backup first, puts the old one back if a check fails):
+
+```
+./docker/tak-docker-update-db.sh
+```
+
+Details for both are in DEPLOYMENT-GUIDE.md.
+
+### Known limit
+- The Docker installer needs someone at the keyboard (it asks questions). A version that can run unattended is planned for v1.0.3.
 
 ## v1.0.1 (Wed Nov 11, 2026)
 

@@ -80,8 +80,37 @@ apt-get install -y lsb-release
 # Create keyrings directory
 mkdir -p /etc/apt/keyrings
 
-# Download PostgreSQL GPG key
-curl https://www.postgresql.org/media/keys/ACCC4CF8.asc --output /etc/apt/keyrings/postgresql.asc
+# Download PostgreSQL GPG key. A dropped download used to leave an empty key file, and apt then
+# failed with NO_PUBKEY 7FCC7D46ACCC4CF8 (ops #728). Retry, check what arrived, and stop if it never does.
+# >>> pgdg-key
+PGDG_KEY_URL="https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+PGDG_KEY_FILE="${PGDG_KEY_FILE:-/etc/apt/keyrings/postgresql.asc}"
+download_pgdg_key() {
+    local tries=5 n=1 tmp
+    tmp=$(mktemp) || return 1
+    while [ "$n" -le "$tries" ]; do
+        # -f: an HTTP error is a failure. The file must also hold a real key, not an empty or error page.
+        if curl -fsSL --connect-timeout 15 --max-time 60 -o "$tmp" "$PGDG_KEY_URL" \
+            && grep -q -- "-----BEGIN PGP PUBLIC KEY BLOCK-----" "$tmp" \
+            && install -m 0644 "$tmp" "$PGDG_KEY_FILE"; then
+            rm -f "$tmp"
+            return 0
+        fi
+        echo "  PostgreSQL key download failed (attempt $n of $tries)"
+        [ "$n" -lt "$tries" ] && sleep $((n * 3))
+        n=$((n + 1))
+    done
+    rm -f "$tmp"
+    return 1
+}
+# <<< pgdg-key
+
+if ! download_pgdg_key; then
+    echo ""
+    echo "ERROR: Could not download the PostgreSQL signing key from $PGDG_KEY_URL"
+    echo "Check this server's internet connection (DNS, firewall, proxy), then run this script again."
+    exit 1
+fi
 
 # Add PostgreSQL repository
 cat <<EOF | tee /etc/apt/sources.list.d/postgresql.list > /dev/null
@@ -310,6 +339,39 @@ echo "✓ cert-metadata.sh updated"
 # Set proper ownership
 chown -R tak:tak /opt/tak/certs/
 
+# Certificate file permissions (ops #832, ops #838). makeCert.sh writes every keystore (the CA signing keystores, admin.p12,
+# user.p12, takserver.jks and the others) with the mode the umask gives: 664 here. Only TAK Server (user tak) needs
+# them, so they and the CA private keys get owner tak and mode 600. The
+# truststores hold no private key and stay readable. To copy admin.p12 off the server, use root (scp root@...) or sudo.
+# Ubuntu_22.04_TAK_Server_Hardening.sh carries the same two functions, for servers installed before this
+# (the CI check .github/ci/test_ca_key_modes.sh runs them and fails if the two copies differ).
+# BEGIN lock_key_files
+# One file: owner-only for OWNER. A missing file is fine, and a link is never followed. Arguments: FILE OWNER.
+lock_key_file() {
+    { [ -f "$1" ] && [ ! -L "$1" ]; } || return 0
+    chown -h "$2" "$1" && chmod 600 "$1"
+}
+
+# Every file in FOLDER (default /opt/tak/certs/files) that holds a private key gets OWNER (default tak:tak) and mode 600:
+# every keystore (*.jks and *.p12: the CA signing keystores, admin, user, takserver, takserver-le and any client certificate
+# made with makeCert.sh) except a truststore (its name has "truststore" in it: it holds certificates only and is copied to phones),
+# and the CA private keys (<CA>.key of each signing keystore, ca-do-not-share.key, root-ca-do-not-share.key).
+# Safe to run again. Returns 1 if a file could not be changed.
+lock_key_files() {
+    local dir="${1:-/opt/tak/certs/files}" owner="${2:-tak:tak}" f rc=0
+    [ -d "$dir" ] || return 0
+    for f in "$dir"/*.jks "$dir"/*.p12; do
+        case "${f##*/}" in *truststore*) continue ;; esac
+        lock_key_file "$f" "$owner" || rc=1
+        case "${f##*/}" in *-signing.*) lock_key_file "${f%-signing.*}.key" "$owner" || rc=1 ;; esac
+    done
+    for f in "$dir"/ca-do-not-share.key "$dir"/root-ca-do-not-share.key; do
+        lock_key_file "$f" "$owner" || rc=1
+    done
+    return $rc
+}
+# END lock_key_files
+
 echo ""
 echo "Creating certificates..."
 echo "This will take a few minutes..."
@@ -323,6 +385,8 @@ echo "$ROOT_CA_NAME" | sudo -u tak ./makeRootCa.sh
 echo ""
 echo "Creating Intermediate CA: $INTERMEDIATE_CA_NAME"
 echo -e "y\n" | sudo -u tak ./makeCert.sh ca "$INTERMEDIATE_CA_NAME"
+# the CA keystores exist from here on: close the keystores made so far now, and all of them once more when every certificate is made
+lock_key_files /opt/tak/certs/files tak:tak || true
 
 # Create server certificate
 echo ""
@@ -340,6 +404,13 @@ echo "Creating user certificate..."
 sudo -u tak ./makeCert.sh client user
 
 echo "✓ All certificates created successfully"
+
+if lock_key_files /opt/tak/certs/files tak:tak; then
+    echo "✓ Keystores and CA keys (admin.p12, user.p12, takserver.jks, CA signing keystores): owner tak, mode 600"
+else
+    echo "⚠ WARNING: Could not set owner tak and mode 600 on every keystore and CA key in /opt/tak/certs/files"
+    echo "  Check them: ls -l /opt/tak/certs/files/*.p12 /opt/tak/certs/files/*.jks /opt/tak/certs/files/*.key"
+fi
 
 echo ""
 echo "Restarting TAK Server..."
@@ -444,6 +515,7 @@ echo "   (You'll need this to import certificates into browsers/devices)"
 echo ""
 echo "Next Steps:"
 echo "  1. Download admin certificate: /opt/tak/certs/files/admin.p12"
+echo "     (only root and the tak user can read it: copy it as root, or with sudo)"
 echo "  2. Import admin.p12 into your browser (password: atakatak)"
 echo "  3. Access WebGUI: https://$(hostname -I | awk '{print $1}'):8443"
 echo ""
