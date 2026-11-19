@@ -29,6 +29,16 @@ sudo ./Ubuntu_22.04_Caddy_setup.sh
 sudo ./Ubuntu_22.04_TAK_Server_Hardening.sh
 ```
 
+**Other supported systems** (x86_64 and arm64, including Raspberry Pi 5): use the folder and script names for your OS instead.
+
+| OS | Folder | Scripts |
+|---|---|---|
+| Ubuntu 22.04 | `ubuntu-22.04/` | `Ubuntu_22.04_*.sh` |
+| Ubuntu 24.04 | `ubuntu-24.04/` | `Ubuntu_24.04_*.sh` |
+| Debian 13 (trixie) | `debian-trixie/` | `Debian_13_*.sh` |
+
+Each script checks the OS and CPU first and asks before it continues on a different one. On Debian 13 the install script adds Azul Zulu 17 (JDK and JRE, full and headless) from the Azul apt repository, because Debian 13 has no OpenJDK 17 and TAK Server needs Java 17.
+
 **Docker (optional):** use the official Docker ZIP, then run `./docker/tak-docker-install.sh /path/to/takserver-docker-<version>.zip` (see [DEPLOYMENT-GUIDE.md](DEPLOYMENT-GUIDE.md#docker-tak-server-using-official-docker-zip-optional)).
 The Docker install asks which address or name your ATAK users will type, and puts it in the server certificate. To sign in from ATAK with a username and password, also load the installer's CA file into ATAK ([how](DEPLOYMENT-GUIDE.md#signing-in-from-atak-with-a-username-and-password-port-8446)).
 
@@ -96,6 +106,8 @@ tak-server-installer/
 │   ├── Ubuntu_22.04_TAK_Server_install.sh    # TAK Server installation
 │   ├── Ubuntu_22.04_Caddy_setup.sh           # SSL/Let's Encrypt setup
 │   └── Ubuntu_22.04_TAK_Server_Hardening.sh  # Production hardening & monitoring
+├── ubuntu-24.04/                             # same three scripts for Ubuntu 24.04 (Ubuntu_24.04_*.sh)
+├── debian-trixie/                            # same three scripts for Debian 13 (Debian_13_*.sh)
 ├── docker/
 │   ├── tak-docker-install.sh   # Install from takserver-docker-*.zip
 │   └── docker-compose.yml      # Optional stack after images are built

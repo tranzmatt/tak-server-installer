@@ -130,6 +130,16 @@ jobs:
           persist-credentials: false
       - run: bash .github/ci/test_pgdg_key.sh
 
+  # The ubuntu-24.04 and debian-trixie folders are copies of ubuntu-22.04: the key downloads and lock_key_files must not drift apart.
+  distro-copies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - run: bash .github/ci/test_distro_copies.sh
+
   # The Ubuntu Caddy script retries the signing key and repo list downloads and stops with a clear message if they never work (ops #730).
   caddy-key:
     runs-on: ubuntu-24.04

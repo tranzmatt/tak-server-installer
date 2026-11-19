@@ -18,8 +18,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # --- 1. every script a user runs (the install folders) is stored as 100755
-non_exec=$(git ls-files -s -- 'ubuntu-22.04/*.sh' 'docker/*.sh' | awk '$1 != "100755" {print $1, $4}')
-if [ -z "$non_exec" ]; then ok "every script in ubuntu-22.04/ and docker/ is stored as 100755"; \
+non_exec=$(git ls-files -s -- 'ubuntu-22.04/*.sh' 'ubuntu-24.04/*.sh' 'debian-trixie/*.sh' 'docker/*.sh' | awk '$1 != "100755" {print $1, $4}')
+if [ -z "$non_exec" ]; then ok "every script in the install folders and docker/ is stored as 100755"; \
 else fail "scripts stored without the executable bit (git sees a user's chmod +x as a local change)" "$non_exec"; fi
 
 # --- 2. the user's own steps: clone the committed files, run each chmod +x the docs list, git must stay clean

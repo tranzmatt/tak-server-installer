@@ -5,6 +5,7 @@ What changed for people running these scripts. Newest first.
 ## Unreleased
 
 ### Added
+- Install scripts for Ubuntu 24.04 (`ubuntu-24.04/`) and Debian 13 trixie (`debian-trixie/`), for x86-64 and arm64 (Raspberry Pi 5). Same three scripts as Ubuntu 22.04, plus: an OS and CPU check, the packages a minimal image lacks (sudo, ufw, curl, gnupg), Java 17 selected over the newer default Java, and on Debian 13 Azul Zulu 17 from the Azul apt repository (Debian 13 has no OpenJDK 17). The SSH port change in the hardening script also works on Ubuntu 24.04, where sshd starts from `ssh.socket`.
 - Docker install warns when the machine has less than 8 GB of RAM.
 - Docker install takes the ZIP's path as its argument, so it can be kept anywhere (`--help` shows usage), and says whether it is a standard or hardened bundle. Putting it in `~/tak-docker/` still works.
 - `takx/install-takx.sh`: installs TAKX from its install4j installer, unattended, on arm64 as well as x86-64 (uses a system JDK 17 instead of the bundled x64 one). See `takx/README.md`.
