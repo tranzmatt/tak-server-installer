@@ -7,12 +7,22 @@ What changed for people running these scripts. Newest first.
 ### Added
 - `takx/install-takx.sh` installs Java 17 itself when a system JDK 17 is needed and none is found (`--no-install-java` to stop that): the OS's OpenJDK 17 on Ubuntu and Debian 12, Azul Zulu 17 on Debian 13 (trixie), on amd64 and arm64. On arm64 it also swaps the installer's x64 `jre/` for a link to the arm64 JDK, instead of printing the command.
 - Install scripts for Ubuntu 24.04 (`ubuntu-24.04/`) and Debian 13 trixie (`debian-trixie/`), for x86-64 and arm64 (Raspberry Pi 5). Same three scripts as Ubuntu 22.04, plus: an OS and CPU check, the packages a minimal image lacks (sudo, ufw, curl, gnupg), Java 17 selected over the newer default Java, and on Debian 13 Azul Zulu 17 from the Azul apt repository (Debian 13 has no OpenJDK 17). The SSH port change in the hardening script also works on Ubuntu 24.04, where sshd starts from `ssh.socket`.
-- Docker install warns when the machine has less than 8 GB of RAM.
-- Docker install takes the ZIP's path as its argument, so it can be kept anywhere (`--help` shows usage), and says whether it is a standard or hardened bundle. Putting it in `~/tak-docker/` still works.
 - `takx/install-takx.sh`: installs TAKX from its install4j installer, unattended, on arm64 as well as x86-64 (uses a system JDK 17 instead of the bundled x64 one). See `takx/README.md`.
 
-### Docs
-- Raspberry Pi 5 / ARM64 notes for the Docker install.
+## v1.0.4 (Thu Nov 19, 2026)
+
+Docker installs of TAK Server 5.8 no longer fill the disk with database log files, the installer takes the TAK ZIP's path, and it warns about small machines.
+
+### Fixed
+- Docker install of TAK Server 5.8: PostgreSQL now recycles its write-ahead log (WAL). TAK's database config copied each WAL file into a folder that does not exist, so every copy failed and PostgreSQL kept every file instead of staying near 1 GB, and the disk of a busy server filled up over time. New installs are fixed by the installer. Nothing was ever archived, so nothing is lost.
+
+### Added
+- Docker install: you can pass the path of the TAK Server Docker ZIP (`./docker/tak-docker-install.sh /path/to/takserver-docker-<version>.zip`). The ZIP can be anywhere. With no path, it works as before. A missing file, or a file that is not a `takserver-docker-*.zip`, stops the script before any step. Thanks @tranzmatt.
+- Docker install: warns when the machine has under 8 GB of RAM. It only warns and keeps going. Thanks @tranzmatt.
+- Guide: Raspberry Pi 5 / ARM64 notes, contributed by @tranzmatt from his own Pi 5. We have not tested them.
+
+### Installed with v1.0.3 or older (Docker)?
+Get the new scripts (`git pull`), then run `./docker/tak-docker-fix-wal.sh` once on the machine that runs TAK Server. `--check` only looks. It does not restart TAK Server, takes about a minute, and is safe to run again. Measured on a test server that had grown to 2.2 GB of WAL: back to about 850 MB at once.
 
 ## v1.0.3 (Tue Nov 17, 2026)
 
