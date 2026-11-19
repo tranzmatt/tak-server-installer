@@ -25,6 +25,7 @@ DESKTOP_LINK=false
 MODE="auto"             # auto | quiet | console | gui
 SYSTEM_JAVA=auto        # auto | yes | no
 JAVA_HOME_ARG=""
+INSTALL_JAVA=auto       # auto | no : install Java 17 from apt when a system JDK 17 is needed and missing
 TEMP_DIR=""
 OVERWRITE=false
 DRY_RUN=false
@@ -80,6 +81,12 @@ JAVA
   --java-home DIR      JDK 17 to use (implies --system-java).
                        Otherwise searched in order: INSTALL4J_JAVA_HOME,
                        JAVA_HOME, /usr/lib/jvm/*, /opt/java*, java on PATH.
+  --no-install-java    If no JDK 17 is found, stop instead of installing one.
+                       Default: install it with apt. Ubuntu 22.04/24.04 and
+                       Debian 12 use their own openjdk-17 packages; Debian 13
+                       (trixie) has none, so the Azul Zulu 17 apt repository
+                       is added and zulu17-jdk, -jdk-headless, -jre and
+                       -jre-headless are installed (amd64 and arm64).
 
 MODE
   --quiet, -q          Unattended, no prompts (default). Needs no display.
@@ -127,7 +134,7 @@ NOTES
   * Exit status is the installer's. Failed runs: retry with --keep-temp, and
     send the output.
   * On arm64, if the install dir ends up with an x64 jre/ folder, the script
-    prints the command to replace it with a link to your arm64 JDK.
+    moves it to jre.x64 and links jre to your arm64 JDK 17.
 EOF
 }
 
@@ -149,6 +156,7 @@ while [ $# -gt 0 ]; do
     --desktop-link) DESKTOP_LINK=true; shift;;
     --system-java)  SYSTEM_JAVA=yes; shift;;
     --bundled-java) SYSTEM_JAVA=no; shift;;
+    --no-install-java) INSTALL_JAVA=no; shift;;
     --java-home)    JAVA_HOME_ARG="${2:?}"; SYSTEM_JAVA=yes; shift 2;;
     --quiet|-q)     MODE=quiet; shift;;
     --console|-c)   MODE=console; shift;;
@@ -213,6 +221,15 @@ fi
 [ -n "$INSTALL_DIR" ] || INSTALL_DIR="$PREFIX/$VARIANT"
 [ -n "$DATA_DIR" ]    || DATA_DIR="$PREFIX/$VARIANT-data"
 
+# ---- root (before Java, which may have to be installed) -------------------------
+# The installer itself aborts with "You must be logged in as root", so re-run
+# this script under sudo (a dry run never needs root).
+if [ "$(id -u)" -ne 0 ] && ! $DRY_RUN && ! $NO_SUDO; then
+  command -v sudo >/dev/null 2>&1 || die "the installer must run as root and sudo is not available"
+  info "installer requires root - re-running with sudo"
+  exec sudo "$0" "${ORIG_ARGS[@]}"
+fi
+
 # ---- architecture / java --------------------------------------------------
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -230,6 +247,51 @@ java_major() {  # prints major version of the java binary at $1, or nothing
   out="$(printf '%s' "$out" | sed -n 's/.*version "\([0-9]*\)\.\([0-9]*\).*/\1 \2/p')"
   set -- $out
   if [ "${1:-}" = 1 ]; then echo "${2:-}"; else echo "${1:-}"; fi
+}
+
+elf_arch() {  # prints x86_64, aarch64 or unknown for the ELF file $1 (no "file" command needed)
+  local m
+  m="$(od -An -tx1 -j18 -N2 "$1" 2>/dev/null | tr -d ' \n')"
+  case "$m" in 3e00) echo x86_64;; b700) echo aarch64;; *) echo unknown;; esac
+}
+
+# Install a JDK 17 with apt. Ubuntu and Debian 12 have openjdk-17; Debian 13 (trixie) does not, so use Azul Zulu 17.
+install_java17() {
+  command -v apt-get >/dev/null 2>&1 || die "no Java 17 found, and this is not an apt system. Install a JDK 17 and pass --java-home DIR."
+  export DEBIAN_FRONTEND=noninteractive
+  local deb_arch key_url key_file ok n tmp policy
+  deb_arch="$(dpkg --print-architecture)"
+  case "$deb_arch" in amd64|arm64) ;; *) die "no Java 17 package set for CPU architecture $deb_arch. Install a JDK 17 and pass --java-home DIR.";; esac
+  info "installing Java 17 ..."
+  apt-get update
+  apt-get install -y ca-certificates curl gnupg
+  policy="$(apt-cache policy openjdk-17-jdk 2>/dev/null || true)"   # captured first: grep -q closing the pipe would fail under pipefail
+  if grep -q 'Candidate: [0-9]' <<<"$policy"; then
+    apt-get install -y openjdk-17-jdk openjdk-17-jdk-headless openjdk-17-jre openjdk-17-jre-headless \
+      || die "could not install the OpenJDK 17 packages"
+    return 0
+  fi
+  info "OpenJDK 17 is not in this system's repositories: adding the Azul Zulu repository"
+  key_url="https://repos.azul.com/azul-repo.key"
+  key_file="/etc/apt/keyrings/azul.asc"
+  mkdir -p /etc/apt/keyrings
+  ok=false
+  for n in 1 2 3 4 5; do
+    tmp="$(mktemp)"
+    if curl -fsSL --connect-timeout 15 --max-time 60 -o "$tmp" "$key_url" \
+       && grep -q -- "-----BEGIN PGP PUBLIC KEY BLOCK-----" "$tmp" \
+       && install -m 0644 "$tmp" "$key_file"; then
+      ok=true; rm -f "$tmp"; break
+    fi
+    rm -f "$tmp"
+    echo "  Azul key download failed (attempt $n of 5)" >&2
+    [ "$n" -lt 5 ] && sleep $((n * 3))
+  done
+  $ok || die "could not download the Azul signing key from $key_url. Check this machine's internet connection, then run again."
+  echo "deb [signed-by=$key_file] https://repos.azul.com/zulu/deb stable main" > /etc/apt/sources.list.d/zulu.list
+  apt-get update
+  apt-get install -y zulu17-jdk zulu17-jdk-headless zulu17-jre zulu17-jre-headless \
+    || die "could not install the Azul Zulu 17 packages"
 }
 
 find_java17() {
@@ -255,26 +317,30 @@ find_java17() {
 
 JAVA17=""
 if [ "$SYSTEM_JAVA" = yes ]; then
-  JAVA17="$(find_java17)" || die "no Java 17 found. Install a JDK 17 (e.g. 'sudo apt install openjdk-17-jdk') or pass --java-home DIR.
+  if ! JAVA17="$(find_java17)"; then
+    if [ -n "$JAVA_HOME_ARG" ] || [ "$INSTALL_JAVA" = no ]; then
+      die "no Java 17 found. Install a JDK 17 (Ubuntu/Debian 12: 'sudo apt install openjdk-17-jdk'; Debian 13: see --help) or pass --java-home DIR.
 The installer requires exactly Java 17."
-  [ -x "$JAVA17/bin/javac" ] || echo "WARNING: $JAVA17 has no javac (JRE only?). If the installer fails, install a full JDK 17." >&2
-  if $IS_ARM && [ -f "$JAVA17/bin/java" ]; then
-    file "$JAVA17/bin/java" 2>/dev/null | grep -qiE 'x86-64|x86_64' && die "$JAVA17 is an x86-64 JDK on an arm machine"
+    elif $DRY_RUN; then
+      info "no Java 17 found: a real run would install one (Ubuntu/Debian 12: openjdk-17, Debian 13: Azul Zulu 17)"
+      JAVA17="<Java 17 would be installed>"
+    else
+      [ "$(id -u)" -eq 0 ] || die "no Java 17 found and installing it needs root: run with sudo (or install a JDK 17 and re-run)"
+      install_java17
+      JAVA17="$(find_java17)" || die "installed Java 17 but could not find it under /usr/lib/jvm. Pass --java-home DIR."
+    fi
+  fi
+  if [ -d "$JAVA17" ]; then
+    [ -x "$JAVA17/bin/javac" ] || echo "WARNING: $JAVA17 has no javac (JRE only?). If the installer fails, install a full JDK 17." >&2
+    if $IS_ARM && [ -f "$JAVA17/bin/java" ] && [ "$(elf_arch "$JAVA17/bin/java")" = x86_64 ]; then
+      die "$JAVA17 is an x86-64 JDK on an arm machine"
+    fi
   fi
 fi
 
 # ---- mode -----------------------------------------------------------------
 if [ "$MODE" = auto ]; then
   MODE=quiet      # unattended by default: repeatable, works with no display
-fi
-
-# ---- root --------------------------------------------------------------------
-# The installer itself aborts with "You must be logged in as root", so re-run
-# this script under sudo (a dry run never needs root).
-if [ "$(id -u)" -ne 0 ] && ! $DRY_RUN && ! $NO_SUDO; then
-  command -v sudo >/dev/null 2>&1 || die "the installer must run as root and sudo is not available"
-  info "installer requires root - re-running with sudo"
-  exec sudo "$0" "${ORIG_ARGS[@]}"
 fi
 
 # ---- permissions check ----------------------------------------------------
@@ -345,9 +411,17 @@ env "${ENVV[@]}" sh "$INSTALLER" "${ARGS[@]}" || rc=$?
 
 if [ $rc -eq 0 ]; then
   info "done. Installed to $INSTALL_DIR"
-  if $IS_ARM && [ -d "$INSTALL_DIR/jre" ]; then
-    echo "NOTE: $INSTALL_DIR/jre exists. If it is x64, replace it with a symlink to $JAVA17:" >&2
-    echo "      mv '$INSTALL_DIR/jre' '$INSTALL_DIR/jre.x64' && ln -s '$JAVA17' '$INSTALL_DIR/jre'" >&2
+  # The installer ships an x64 runtime in jre/. On arm64 that cannot run, so point jre at the arm64 JDK 17.
+  if $IS_ARM && [ -d "$INSTALL_DIR/jre" ] && [ ! -L "$INSTALL_DIR/jre" ] && [ -f "$INSTALL_DIR/jre/bin/java" ] \
+     && [ "$(elf_arch "$INSTALL_DIR/jre/bin/java")" = x86_64 ]; then
+    info "replacing the x64 runtime in $INSTALL_DIR/jre with a link to $JAVA17"
+    if [ -e "$INSTALL_DIR/jre.x64" ]; then
+      echo "NOTE: $INSTALL_DIR/jre.x64 already exists; left $INSTALL_DIR/jre as it is. Replace it yourself:" >&2
+      echo "      rm -rf '$INSTALL_DIR/jre' && ln -s '$JAVA17' '$INSTALL_DIR/jre'" >&2
+    else
+      mv "$INSTALL_DIR/jre" "$INSTALL_DIR/jre.x64" && ln -s "$JAVA17" "$INSTALL_DIR/jre" \
+        || echo "WARNING: could not swap the runtime. Do it by hand: mv '$INSTALL_DIR/jre' '$INSTALL_DIR/jre.x64' && ln -s '$JAVA17' '$INSTALL_DIR/jre'" >&2
+    fi
   fi
 fi
 exit $rc

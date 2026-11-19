@@ -20,12 +20,17 @@ The script looks for the installer in its own folder. From this repo, point it a
 
 Run `./takx/install-takx.sh --help` for every option (paths, Java, mode, temp dir).
 
-## Java 17 on Debian 13 / Raspberry Pi OS (trixie)
+## Java 17
 
-Debian 13 ships Java 21 and has no `openjdk-17-jdk` package, so the script's `apt install` hint does not apply there. Install Eclipse Temurin 17 for aarch64 from [adoptium.net](https://adoptium.net) and pass its folder:
+On a system JDK (always on arm64, or with `--system-java`) the script finds a Java 17 itself, and **installs one with apt if there is none** (it needs root, which it already asks for with sudo; `--no-install-java` turns this off):
 
-```bash
-./takx/install-takx.sh --installer /path/to/takx-unix-jdk17-<version>.sh --java-home /path/to/jdk-17
-```
+| OS | Java 17 source |
+|---|---|
+| Ubuntu 22.04, Ubuntu 24.04, Debian 12 | the OS's own `openjdk-17-jdk`, `-jdk-headless`, `-jre`, `-jre-headless` |
+| Debian 13 (trixie), Raspberry Pi OS trixie | Debian 13 has no OpenJDK 17, so the Azul Zulu apt repository is added and `zulu17-jdk`, `zulu17-jdk-headless`, `zulu17-jre`, `zulu17-jre-headless` are installed (amd64 and arm64) |
 
-Ubuntu 22.04/24.04 and Debian 12 still have `openjdk-17-jdk`.
+To use a JDK 17 you already have somewhere else, pass `--java-home /path/to/jdk-17`.
+
+## arm64: the bundled runtime
+
+The installer carries an x64 Java runtime. On arm64 the script tells the installer not to use it, and after the install, if `<install dir>/jre` is an x64 runtime, it moves it to `jre.x64` and links `jre` to the arm64 JDK 17.
